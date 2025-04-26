@@ -1,0 +1,36 @@
+
+manipulatorpy_node:
+  ros__parameters:
+    controller_name: "joint_trajectory_controller"
+    wait_sec_between_publish: 5
+
+    goal_names: ["pos1", "pos2", "pos3", "pos4"]
+    # pos1:
+    #   positions: [0.0, 0.0, 0.0, 0.0]
+    # pos2:
+    #   positions: [0.0, -0.36, 0.0, 0.0]
+    # pos3:
+    #   positions: [0.49, -0.36, 0.0, 0.0]
+    # pos4:
+    #   positions: [0.49, -0.36, 0.78, 0.0]
+    pos1:
+      positions: [0.0, 0.0, 0.0, 0.0]
+    pos2:
+      positions: [0.0, -0.57, -0.78, 0.0]
+    pos3:
+      positions: [-1.57, -1.05, 1.05, 0.0]
+    pos4:
+      positions: [0.0, -1.05, 1.05, 0.0]
+
+    joints:
+      - joint1
+      - joint2
+      - joint3
+      - joint4
+
+    check_starting_point: true
+    starting_point_limits:
+      joint1: [-3.14,3.14]
+      joint2: [-1.5,1.5]
+      joint3: [-1.5,1.4]
+      joint4: [-1.7,1.97]

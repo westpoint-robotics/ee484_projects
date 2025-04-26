@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'ee484_projects'
+package_name = 'navigation_mission'
 
 setup(
     name=package_name,
@@ -20,7 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-        'waypoint_nav = ee484_projects.waypoint_nav:main',
+        'waypoint_nav = navigation_mission.waypoint_nav:main',
         ],
     },
 )

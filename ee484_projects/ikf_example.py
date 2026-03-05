@@ -12,6 +12,7 @@ from ament_index_python.packages import get_package_share_directory
 import os
 from urdf_parser_py.urdf import URDF
 import traceback
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from control_msgs.action import GripperCommand
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import JointState
@@ -663,7 +664,7 @@ class ArmController(Node):
         self.declare_parameter("fixed_roll", 0.0)
         self.declare_parameter("fixed_pitch",  0.0)
         self.declare_parameter("fixed_yaw", 0.0)
-        self.declare_parameter("target_speed", 0.03)
+        self.declare_parameter("target_speed", 0.1)
 
         self.start_delay_sec = self._get_param("start_delay_sec")
         self.time_to_reach_start = self._get_param("time_to_reach_start")
@@ -998,8 +999,8 @@ class ArmController(Node):
             if (i+1) % 50 == 0 or i == num_targets - 1:
                  self.get_logger().info(f"Processed point {i+1}/{num_targets}. Success: {successful_points}. Traj Time: {last_time_from_start:.2f}s")
 
-        # for point in traj.points:
-        #     self.get_logger().info(f"Processed point at {point.positions}.")              
+        for point in traj.points:
+            self.get_logger().info(f"Processed point at\n {point}.")              
 
         # --- Add the return-to-home point ---
         if successful_points > 0 and last_sent_joint_angles_ik is not None:
@@ -1343,21 +1344,41 @@ class ArmController(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    
-    controller = ArmController()
-    
+    node = None
+    executor = None
     try:
-        # Keep node alive to receive callbacks
-        rclpy.spin(controller)
+        print("Creating IntegratedManipulatorNode...")
+        node = ArmController()
+        if node and rclpy.ok():
+             print("Node created. Creating MultiThreadedExecutor...")
+             executor = MultiThreadedExecutor()
+             executor.add_node(node)
+             print(f"Node '{node.get_name()}' added. Spinning executor...")
+             executor.spin()
+        else:
+             print("Node initialization failed or shutdown requested early.")            
 
-    except KeyboardInterrupt:
-        controller.move_arm_stow()
-        controller.get_logger().info('Shutting down...')
+
+    except KeyboardInterrupt: print("Keyboard interrupt received.")
+    except ExternalShutdownException: print("External shutdown request received.")
+    except Exception as e: print(f"Unhandled exception in main: {e}\n{traceback.format_exc()}")
     finally:
-        if rclpy.ok():
-            controller.destroy_node()
-            rclpy.shutdown()
+        print("Executing finally block...")
+        if executor:
+            print("Shutting down executor...")
+            executor.shutdown()
+            print("Executor shutdown complete.")
+        # Ensure node destruction happens *after* executor shutdown if possible
+        if node:
+            print("Destroying node...")
+            try: node.destroy_node()
+            except Exception as e: print(f"Error during node destruction: {e}")
+            print("Node destruction finished.")
 
+        if rclpy.ok():
+            print("Shutting down rclpy...")
+            rclpy.shutdown()
+        print("Shutdown complete.")
 
 if __name__ == '__main__':
     main()

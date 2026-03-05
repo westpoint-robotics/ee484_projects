@@ -16,6 +16,7 @@ from control_msgs.action import GripperCommand
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import JointState
 import time
+import threading
 try:
     from scipy.signal import savgol_filter
     SCIPY_AVAILABLE = True
@@ -158,11 +159,18 @@ def rotation_about_axis(axis, angle):
     t = 1 - c # Useful intermediate term: 1 - cos(angle)
 
     # Rodrigues' rotation formula elements for the 3x3 matrix
+    # R = np.array([
+    #     [t*x*x + c,    t*x*y - s*z,  t*x*z + s*y],
+    #     [t*x*y + s*z,  t*y*y + c,    t*x*y - s*x], # REDACTED: Element R[1,2]
+    #     [t*x*z - s*y,  t*x*y + s*x,  t*z*z + c]  # REDACTED: Element R[2,1]
+    # ])
+    # CORRECTED Rodrigues' rotation formula
     R = np.array([
         [t*x*x + c,    t*x*y - s*z,  t*x*z + s*y],
-        [t*x*y + s*z,  t*y*y + c,    t*x*y - s*x], # REDACTED: Element R[1,2]
-        [t*x*z - s*y,  t*x*y + s*x,  t*z*z + c]  # REDACTED: Element R[2,1]
-    ])
+        [t*x*y + s*z,  t*y*y + c,    t*y*z - s*x],  # Fixed: was t*x*y - s*x
+        [t*x*z - s*y,  t*y*z + s*x,  t*z*z + c]     # Fixed: was t*x*y + s*x
+    ])        
+
 
     # Create 4x4 identity matrix
     T = np.eye(4)
@@ -172,8 +180,6 @@ def rotation_about_axis(axis, angle):
 
     return T
 
-def build_child_map(robot):
-    return {j.child: j for j in robot.joints}
 
 def get_chain(robot, base_link, tip_link):
     """
@@ -713,12 +719,12 @@ class ArmController(Node):
                  self.get_logger().error(f"Mismatch: 'joints' param {self.joint_names_param} != IK joints {self.ik_joint_names}.")
                  rclpy.try_shutdown(); return
             if list(self.joint_names_param) != list(self.ik_joint_names):
-                 self.get_logger().warn(f"Order mismatch: param {self.joint_names_param} vs IK {self.ik_joint_names}. Assuming param order for controller.")
+                 self.get_logger().warning(f"Order mismatch: param {self.joint_names_param} vs IK {self.ik_joint_names}. Assuming param order for controller.")
         except Exception as e:
              self.get_logger().error(f"Failed to setup kinematics: {e}\n{traceback.format_exc()}")
              # If get_chain fails due to redaction, this error might occur.
              # The node might still start, but functionality will be broken.
-             self.get_logger().warn("Continuing initialization despite kinematics setup error (may be due to redactions)...")
+             self.get_logger().warning("Continuing initialization despite kinematics setup error (may be due to redactions)...")
              # rclpy.try_shutdown(); return # Don't shutdown, allow it to run partially so cadets can troubleshoot
 
 
@@ -733,7 +739,7 @@ class ArmController(Node):
         # DML Gripper not working for now TODO fix this
         self.gripper_client = ActionClient(self, GripperCommand, '/gripper_controller/gripper_cmd')
         if not self.gripper_client.wait_for_server(timeout_sec=2.0): 
-            self.get_logger().warn("Gripper action server not available.")
+            self.get_logger().warning("Gripper action server not available.")
         else: 
             self.get_logger().info("Gripper action client connected.")
 
@@ -767,7 +773,7 @@ class ArmController(Node):
             return
 
         if not self.joint_state_msg_received or self.current_joint_angles is None:
-            self.get_logger().warn("Joint states not ready. Retrying trajectory initiation in 5s.")
+            self.get_logger().warning("Joint states not ready. Retrying trajectory initiation in 5s.")
             # Reschedule the check
             self.initiation_timer = self.create_timer(5.0, self.initiate_trajectory)
             return
@@ -786,11 +792,11 @@ class ArmController(Node):
     def _smooth_cartesian_path(self, points_3d):
         """Applies Savitzky-Golay filter to smooth the 3D path."""
         if not SCIPY_AVAILABLE:
-            self.get_logger().warn("Scipy not installed. Cannot perform Cartesian path smoothing.", throttle_duration_sec=30)
+            self.get_logger().warning("Scipy not installed. Cannot perform Cartesian path smoothing.", throttle_duration_sec=30)
             return points_3d # Return original points
 
         if len(points_3d) < self.smoothing_window:
-            self.get_logger().warn(f"Not enough points ({len(points_3d)}) for smoothing window ({self.smoothing_window}). Skipping smoothing.")
+            self.get_logger().warning(f"Not enough points ({len(points_3d)}) for smoothing window ({self.smoothing_window}). Skipping smoothing.")
             return points_3d # Return original points
 
         if self.smoothing_polyorder >= self.smoothing_window:
@@ -820,15 +826,25 @@ class ArmController(Node):
             return points_3d
 
 
-    def generate_and_send_trajectory(self):
-        """Starts the trajectory generation in a separate thread."""
-        if self.trajectory_active:
-            self.get_logger().warn("Trajectory generation already active. Ignoring request.")
-            return
+    def generate_and_send_trajectory(self): 
+        if self.trajectory_active: 
+            self.get_logger().warning("Trajectory generation already active. Ignoring request.") 
+            return 
+        self.trajectory_active = True 
+        self.get_logger().info("Starting trajectory task in background thread...") 
+        thread = threading.Thread(target=self._execute_trajectory_task, daemon=True) 
+        thread.start()
 
-        self.trajectory_active = True
-        self.get_logger().info("Starting trajectory task in background thread...")
-        thread = self._execute_trajectory_task()
+
+    # def generate_and_send_trajectory(self):
+    #     """Starts the trajectory generation in a separate thread."""
+    #     if self.trajectory_active:
+    #         self.get_logger().warning("Trajectory generation already active. Ignoring request.")
+    #         return
+
+    #     self.trajectory_active = True
+    #     self.get_logger().info("Starting trajectory task in background thread...")
+    #     thread = self._execute_trajectory_task()
 
     def _get_param(self, name):
         """Helper to get parameter value."""
@@ -847,7 +863,7 @@ class ArmController(Node):
     def _calculate_ik_and_build_trajectory(self,
                                            points3D,
                                            initial_joint_angles_ik_order,    # Use this for seeding IK
-                                           initial_angles_controller_order # Use this for the return point
+                                           initial_angles_controller_order   # Use this for the return point
                                           ):
         """
         Calculates IK for 3D points, builds the JointTrajectory message with
@@ -940,7 +956,7 @@ class ArmController(Node):
 
                 time_increment = max(time_cartesian, time_joint_limited, self.min_segment_time)
                 if time_increment <= 1e-9:
-                     self.get_logger().warn(f"Calculated zero/negative time_increment ({time_increment:.4g}) for segment {i}. Using min_segment_time.")
+                     self.get_logger().warning(f"Calculated zero/negative time_increment ({time_increment:.4g}) for segment {i}. Using min_segment_time.")
                      time_increment = self.min_segment_time
                 current_time_from_start = last_time_from_start + time_increment
 
@@ -976,11 +992,14 @@ class ArmController(Node):
                 successful_points += 1
 
             else: # If IK failed or crashed
-                 self.get_logger().warn(f"IK failed or skipped for point {i+1} (Pos: {np.round(T_desired[:3,3],3)}).")
+                 self.get_logger().warning(f"IK failed or skipped for point {i+1} (Pos: {np.round(T_desired[:3,3],3)}).")
                  current_ik_solution = ik_solution # Use the failed solution as seed for next attempt
 
             if (i+1) % 50 == 0 or i == num_targets - 1:
                  self.get_logger().info(f"Processed point {i+1}/{num_targets}. Success: {successful_points}. Traj Time: {last_time_from_start:.2f}s")
+
+        # for point in traj.points:
+        #     self.get_logger().info(f"Processed point at {point.positions}.")              
 
         # --- Add the return-to-home point ---
         if successful_points > 0 and last_sent_joint_angles_ik is not None:
@@ -1001,13 +1020,13 @@ class ArmController(Node):
             current_time_from_start = return_time_abs
             self.get_logger().info(f"Return point added. New total trajectory time: {current_time_from_start:.2f}s")
         else:
-            self.get_logger().warn("Skipping return point as no points were successfully added to trajectory.")
+            self.get_logger().warning("Skipping return point as no points were successfully added to trajectory.")
 
         if not traj.points:
             self.get_logger().error("No points successfully added to trajectory.")
             return None, 0.0, 0.0
         elif len(traj.points) < 2:
-             self.get_logger().warn("Trajectory contains fewer than 2 points. Movement might be trivial or jerky.")
+             self.get_logger().warning("Trajectory contains fewer than 2 points. Movement might be trivial or jerky.")
 
         return traj, current_time_from_start, total_distance
     
@@ -1024,7 +1043,7 @@ class ArmController(Node):
 
         max_wait = 5.0; waited_time = 0.0; wait_interval = 0.1
         while self.current_joint_angles is None and waited_time < max_wait:
-            self.get_logger().warn(f"Waiting for initial joint angles... ({waited_time:.1f}s)")
+            self.get_logger().warning(f"Waiting for initial joint angles... ({waited_time:.1f}s)")
             time.sleep(wait_interval); waited_time += wait_interval
         if self.current_joint_angles is None:
              self.get_logger().error("Failed to get initial joint angles. Aborting task.")
@@ -1071,6 +1090,7 @@ class ArmController(Node):
 
             # 2b. Smooth the Cartesian Path
             if self.enable_smoothing and SCIPY_AVAILABLE:
+                self.get_logger().info(f"Enable Smoothing selected and SCIPY_AVAILABLE.")
                 points3D = self._smooth_cartesian_path(points3D_raw)
                 # Optional plotting comparison
                 # self._plot_smoothed_vs_raw(points3D_raw, points3D)
@@ -1100,7 +1120,7 @@ class ArmController(Node):
             # 5. NOT NEEDED: Stop Spinning Wheels
             time.sleep(0.1)
 
-            # 6. Publish Trajectory (via internal command)
+            # 6. Publish Trajectory
             self.get_logger().info("Requesting trajectory publish via internal topic...")
             self._last_generated_traj = traj
             if self._last_generated_traj and self.arm_publisher:
@@ -1108,18 +1128,15 @@ class ArmController(Node):
                     self._last_generated_traj = None
             else: self.get_logger().error("No trajectory data or arm publisher for internal command.")
 
-            # 7. Schedule Post-Trajectory Actions (via internal command)
-            # delay = total_time + 2.0 # Add buffer time
-            # self.get_logger().info(f"Requesting scheduling of final actions after {delay:.2f}s.")
-            # self._publish_internal_command({"action": "schedule_final_timer", "delay": delay})
-            # self.get_logger().info("Background trajectory task completed initiation.")
+            # 7. Schedule Post-Trajectory Actions
+            self.get_logger().info("Trajectory computed and published.\n Press CTRL-C to exit")
 
         except Exception as e:
-             self.get_logger().error(f"Unhandled exception in trajectory task thread: {e}\n{traceback.format_exc()}")
+            self.get_logger().error(f"Unhandled exception in trajectory task thread: {e}\n{traceback.format_exc()}")
             #  try: self.safe_publish_velocity(0.0, 0.0)
-        except Exception as e2: 
-            self.get_logger().error(f"Failed to stop wheels during exception handling: {e2}")
             self.trajectory_active = False
+
+        finally: self.trajectory_active = False
 
     def joint_state_callback(self, msg: JointState):
         """Stores the latest joint states needed for IK and initial state capture."""
@@ -1133,7 +1150,7 @@ class ArmController(Node):
         # Check if ik_joint_names is available (might fail during init if get_chain was redacted/failed)
         if not hasattr(self, 'ik_joint_names') or not self.ik_joint_names:
             if not self.joint_state_msg_received: # Log once
-                self.get_logger().warn("IK joint names not available (kinematics setup might have failed). Cannot process joint states.")
+                self.get_logger().warning("IK joint names not available (kinematics setup might have failed). Cannot process joint states.")
             self.joint_state_msg_received = True # Prevent repeated logging
             return
 
@@ -1141,7 +1158,7 @@ class ArmController(Node):
         available = set(msg.name)
         if not required.issubset(available):
             if not self.joint_state_msg_received: # Log once
-                 self.get_logger().warn(f"Waiting for joint states. Missing: {required - available}")
+                 self.get_logger().warning(f"Waiting for joint states. Missing: {required - available}")
             return
 
         current_states = {name: pos for name, pos in zip(msg.name, msg.position)}
@@ -1285,7 +1302,7 @@ class ArmController(Node):
         try:
             goal_handle = future.result()
             if not goal_handle or not goal_handle.accepted:
-                self.get_logger().warn('Gripper goal rejected.')
+                self.get_logger().warning('Gripper goal rejected.')
                 return
             get_result_future = goal_handle.get_result_async()
             get_result_future.add_done_callback(self.gripper_get_result_callback)
@@ -1301,7 +1318,7 @@ class ArmController(Node):
                 # self.get_logger().info(f"Gripper OK: Pos={result.position:.4f} Reached={result.reached_goal}") # Less Verbose
                 pass
             else:
-                self.get_logger().warn(f"Gripper action finished with status: {status} (4=Success)")
+                self.get_logger().warning(f"Gripper action finished with status: {status} (4=Success)")
         except Exception as e:
              self.get_logger().error(f"Exception getting gripper result: {e}")
 
@@ -1316,6 +1333,8 @@ class ArmController(Node):
             item_list = line.strip().split(',')
             print(f'item_list: {item_list}')
             if item_list[0][0] == '#':
+                continue
+            if len(item_list) != 3:
                 continue
             float_list = [float(x) for x in item_list if x]
             points.append(tuple(float_list))

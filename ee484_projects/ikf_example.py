@@ -1358,7 +1358,6 @@ def main(args=None):
         else:
              print("Node initialization failed or shutdown requested early.")            
 
-
     except KeyboardInterrupt: print("Keyboard interrupt received.")
     except ExternalShutdownException: print("External shutdown request received.")
     except Exception as e: print(f"Unhandled exception in main: {e}\n{traceback.format_exc()}")

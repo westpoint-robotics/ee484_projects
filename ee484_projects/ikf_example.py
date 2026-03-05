@@ -1121,12 +1121,6 @@ class ArmController(Node):
             self.get_logger().error(f"Failed to stop wheels during exception handling: {e2}")
             self.trajectory_active = False
 
-
-
-
-
-
-
     def joint_state_callback(self, msg: JointState):
         """Stores the latest joint states needed for IK and initial state capture."""
         self.latest_joint_state_msg = msg # Store the whole message
@@ -1320,6 +1314,9 @@ class ArmController(Node):
             lines_list_stripped = [line.rstrip() for line in file]
         for line in lines_list_stripped:
             item_list = line.strip().split(',')
+            print(f'item_list: {item_list}')
+            if item_list[0][0] == '#':
+                continue
             float_list = [float(x) for x in item_list if x]
             points.append(tuple(float_list))
         return points

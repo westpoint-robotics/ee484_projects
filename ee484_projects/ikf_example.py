@@ -999,8 +999,8 @@ class ArmController(Node):
             if (i+1) % 50 == 0 or i == num_targets - 1:
                  self.get_logger().info(f"Processed point {i+1}/{num_targets}. Success: {successful_points}. Traj Time: {last_time_from_start:.2f}s")
 
-        for point in traj.points:
-            self.get_logger().info(f"Processed point at\n {point}.")              
+        for pose_t in target_poses_T:
+            self.get_logger().info(f"Processed point at\n {pose_t[:3,3]}.")              
 
         # --- Add the return-to-home point ---
         if successful_points > 0 and last_sent_joint_angles_ik is not None:

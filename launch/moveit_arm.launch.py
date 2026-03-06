@@ -22,15 +22,15 @@ def generate_launch_description():
     )
 
     example_file = DeclareLaunchArgument(
-        "default_script",
+        "script_name",
         default_value="moveit_arm.py",
-        description="Default Python script for moving TurtleBot3 manipulator",
+        description="Python script that will be loaded.",
     )
 
     moveit_py_node = Node(
         name="cadetNode",
         package="ee484_projects",
-        executable=LaunchConfiguration("default_script"),
+        executable=LaunchConfiguration("script_name"),
         output="both",
         parameters=[moveit_config.to_dict()],
     )

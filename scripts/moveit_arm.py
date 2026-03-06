@@ -13,6 +13,7 @@ from geometry_msgs.msg import PoseStamped
 
 # moveit python library
 from moveit.core.robot_state import RobotState
+from moveit.core.kinematic_constraints import construct_joint_constraint
 from moveit.planning import (
     MoveItPy,
     MultiPipelinePlanRequestParameters,
@@ -147,7 +148,6 @@ def main():
     ###########################################################################    
 
     # set constraints message (constraints are defined in joint_limits.yaml)
-    from moveit.core.kinematic_constraints import construct_joint_constraint
     robot_state = RobotState(tbot3.get_robot_model())
 
     joint_values_open_gripper = {"gripper_left_joint": 1.0} #Open Gripper (m)

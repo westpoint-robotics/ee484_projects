@@ -40,6 +40,7 @@ install(PROGRAMS
 
 install(PROGRAMS
   scripts/moveit_arm.py
+  scripts/moveit_scene.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -56,6 +56,7 @@ def add_collision_objects(planning_scene_monitor):
         collision_object.header.frame_id = "base_footprint"
         collision_object.id = "boxes"
 
+        # Create a solid box object to add to the scene.
         for position, dimensions in zip(object_positions, object_dimensions):
             box_pose = Pose()
             box_pose.position.x = position[0]

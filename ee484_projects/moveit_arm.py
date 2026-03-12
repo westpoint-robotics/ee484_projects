@@ -125,7 +125,6 @@ def main():
             return False 
         logger.info(f'Connected to Gripper Server: {client._action_name}') 
 
-        send_arm_goal(node, logger, client, position=-0.015)
         send_arm_goal(node, logger, client, position=0.0)
 
         ###########################################################################
@@ -196,9 +195,6 @@ def main():
 
         # Sleep for few seconds
         time.sleep(2)
-
-        # Close the gripper
-        send_arm_goal(node, logger, client, position=-0.01)
 
         ###########################################################################
         # Returning to Home position before program ends

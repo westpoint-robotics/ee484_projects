@@ -10,6 +10,8 @@ import time
 import rclpy
 from rclpy.logging import get_logger
 from geometry_msgs.msg import PoseStamped
+from rclpy.action import ActionClient 
+from control_msgs.action import ParallelGripperCommand
 
 # moveit python library
 from moveit.core.robot_state import RobotState
@@ -70,6 +72,34 @@ def ik_checker(logger, robot_model, pose, planning_group, end_effector, timeout=
         logger.warning("\n\t\t⚠️ IK FAILED — pose unreachable.\n")
         return False
 
+def send_arm_goal(node, logger, client: ActionClient, position): 
+
+    goal = ParallelGripperCommand.Goal()
+    goal.command.position=[position]
+    goal.command.name = ['gripper_left_joint']
+    timeout_sec = 9.0
+
+    send_future = client.send_goal_async(goal)
+    rclpy.spin_until_future_complete(node, send_future, timeout_sec=3.0)
+    goal_handle = send_future.result()
+    if not goal_handle or not goal_handle.accepted:
+        logger.error('Goal was rejected')
+        return None
+
+    logger.info('Goal accepted; waiting for result...')
+    result_future = goal_handle.get_result_async()
+    rclpy.spin_until_future_complete(node, result_future, timeout_sec=timeout_sec)
+    if not result_future.done():
+        logger.error('Timed out waiting for gripper result')
+        return None
+
+    result_msg = result_future.result().result
+    # Safely log common fields (implementations vary)
+    fields_to_log = ['width', 'position', 'effort', 'force', 'stalled', 'reached_goal']
+    summary = {f: getattr(result_msg, f) for f in fields_to_log if hasattr(result_msg, f)}
+    logger.info(f'Result: {summary if summary else "(no standard fields present)"}')
+    return result_msg
+
 def main():
 
     ###################################################################
@@ -80,122 +110,111 @@ def main():
 
     # instantiate MoveItPy instance and get planning component
     tbot3 = MoveItPy(node_name="moveit_py")
+    node = rclpy.create_node('moveit_py_helper_node')
     tbot3_arm = tbot3.get_planning_component("arm")
     tbot3_gripper = tbot3.get_planning_component("gripper")
     logger.info("MoveItPy instance created")
 
-    ###########################################################################
-    # Example #1 - Set goal state using group states (i.e. predefined strings) [These are defined in turtlebot3_manipulation.srdf]
-    ###########################################################################
+    action_name = '/gripper_controller/gripper_cmd'
 
-    #Set start state to current
-    tbot3_arm.set_start_state_to_current_state()
-      
-    # set pose goal using predefined state
-    tbot3_arm.set_goal_state(configuration_name="home")
+    client = ActionClient(node, action_type=ParallelGripperCommand, action_name=action_name)
 
-    # plan to goal
-    plan_and_execute(tbot3, tbot3_arm, logger, sleep_time=3.0) #Forward Kinematics are easy; therefore, default planner & parameters are sufficient - no need for IK solution checking
+    try:
+        if not client.wait_for_server(timeout_sec=5.0): 
+            logger.warning(f'Gripper action server not available at {client._action_name}') 
+            return False 
+        logger.info(f'Connected to Gripper Server: {client._action_name}') 
 
-    ###########################################################################
-    # Example #2: Set goal state with PoseStamped message (Inverse Kinematics)
-    ###########################################################################
-    
-    # Set start state to current state
-    tbot3_arm.set_start_state_to_current_state()
+        send_arm_goal(node, logger, client, position=-0.015)
+        send_arm_goal(node, logger, client, position=0.0)
 
-    #Create a PoseStamped message for the goal pose. Pose is relative to frame_id specified in header (e.g. base_link).
-    pose_goal = PoseStamped()
-    pose_goal.header.frame_id = "base_link"
+        ###########################################################################
+        # Example #1 - Set goal state using group states (i.e. predefined strings) [These are defined in turtlebot3_manipulation.srdf]
+        ###########################################################################
 
-    # Desired Position
-    pose_goal.pose.position.x = 0.15
-    pose_goal.pose.position.y = 0.0
-    pose_goal.pose.position.z = 0.2
-
-    # Desired Orientation (ignored when position_only_ik=True in kinematics.yaml)
-    pose_goal.pose.orientation.x = 0.0
-    pose_goal.pose.orientation.y = 0.0
-    pose_goal.pose.orientation.z = 0.0
-    pose_goal.pose.orientation.w = 1.0
-
-    # Set the goal for the planning component
-    tbot3_arm.set_goal_state(pose_stamped_msg=pose_goal, pose_link="link5") #pose_link should be the end-effector frame, which is the last frame on the arm kinematic chain link5 (see turtlebot3_manipulation.srdf and tbotomx.urdf)
-
-    # ---------------------------------------------------------------------------
-    # Recommendation: Test IK first to ensure that desired goal pose is reachable
-    # ---------------------------------------------------------------------------
-
-    if ik_checker(logger, tbot3.get_robot_model(), pose_goal.pose, "arm", "link5"):
+        #Set start state to current
+        tbot3_arm.set_start_state_to_current_state()
         
-        # -----------------------------------------
-        # Goal pose is reachable - Plan and execute
-        # -----------------------------------------
+        # set pose goal using predefined state
+        tbot3_arm.set_goal_state(configuration_name="home")
 
-        params = PlanRequestParameters(tbot3, "ompl_cadet") #Parameters loaded from YAML File
+        # plan to goal
+        plan_and_execute(tbot3, tbot3_arm, logger, sleep_time=3.0) #Forward Kinematics are easy; therefore, default planner & parameters are sufficient - no need for IK solution checking
+
+        ###########################################################################
+        # Example #2: Set goal state with PoseStamped message (Inverse Kinematics)
+        ###########################################################################
         
-        #You can override the motion planning components in this file by commenting out the line(s) below
-        # params.planning_attempts = 5
-        # params.planning_time = 3.0
-        # params.max_velocity_scaling_factor = 0.8
-        # params.max_acceleration_scaling_factor = 0.8
+        # Set start state to current state
+        tbot3_arm.set_start_state_to_current_state()
 
-        plan_and_execute(tbot3, tbot3_arm, logger, single_plan_parameters=params)
+        #Create a PoseStamped message for the goal pose. Pose is relative to frame_id specified in header (e.g. base_link).
+        pose_goal = PoseStamped()
+        pose_goal.header.frame_id = "base_link"
 
-      
-    ###########################################################################
-    # Example #3: Manipulate the gripper (Forward Kinematics) 
-    ###########################################################################    
+        # Desired Position
+        pose_goal.pose.position.x = 0.15
+        pose_goal.pose.position.y = 0.0
+        pose_goal.pose.position.z = 0.2
 
-    # set constraints message (constraints are defined in joint_limits.yaml)
-    robot_state = RobotState(tbot3.get_robot_model())
+        # Desired Orientation (ignored when position_only_ik=True in kinematics.yaml)
+        pose_goal.pose.orientation.x = 0.0
+        pose_goal.pose.orientation.y = 0.0
+        pose_goal.pose.orientation.z = 0.0
+        pose_goal.pose.orientation.w = 1.0
 
-    joint_values_open_gripper = {"gripper_left_joint": 1.0} #Open Gripper (m)
-    joint_values_closed_gripper = {"gripper_left_joint": -1.0} #Closed Gripper (m)
+        # Set the goal for the planning component
+        tbot3_arm.set_goal_state(pose_stamped_msg=pose_goal, pose_link="link5") #pose_link should be the end-effector frame, which is the last frame on the arm kinematic chain link5 (see turtlebot3_manipulation.srdf and tbotomx.urdf)
 
-    #Define command to open gripper
-    robot_state.joint_positions = joint_values_open_gripper
-    joint_constraint_open_gripper = construct_joint_constraint(
-        robot_state=robot_state,
-        joint_model_group=tbot3.get_robot_model().get_joint_model_group("gripper"),
-    )
+        # ---------------------------------------------------------------------------
+        # Recommendation: Test IK first to ensure that desired goal pose is reachable
+        # ---------------------------------------------------------------------------
 
-    #Define command to close gripper
-    robot_state.joint_positions = joint_values_closed_gripper
-    joint_constraint_closed_gripper = construct_joint_constraint(
-        robot_state=robot_state,
-        joint_model_group=tbot3.get_robot_model().get_joint_model_group("gripper"),
-    )
-    
-    #Define planner parameters
-    params = PlanRequestParameters(tbot3, "ompl_cadet") #Parameters loaded from YAML File
+        if ik_checker(logger, tbot3.get_robot_model(), pose_goal.pose, "arm", "link5"):
+            
+            # -----------------------------------------
+            # Goal pose is reachable - Plan and execute
+            # -----------------------------------------
+
+            params = PlanRequestParameters(tbot3, "ompl_cadet") #Parameters loaded from YAML File
+            
+            #You can override the motion planning components in this file by commenting out the line(s) below
+            # params.planning_attempts = 5
+            # params.planning_time = 3.0
+            # params.max_velocity_scaling_factor = 0.8
+            # params.max_acceleration_scaling_factor = 0.8
+
+            plan_and_execute(tbot3, tbot3_arm, logger, single_plan_parameters=params)
+
         
-    # You can override the motion planning components in this file by commenting out the line(s) below
-    params.max_velocity_scaling_factor = 0.1 #The scaling factors need to be reduced to ~0.1. Otherwise, the gripper trajectory is too short and MoveIt will time out before closing/opening the gripper.
-    params.max_acceleration_scaling_factor = 0.1
+        ###########################################################################
+        # Example #3: Manipulate the gripper direct position commands
+        ###########################################################################    
+        
+        # Open the gripper
+        send_arm_goal(node, logger, client, position=0.015)
 
-    # Open the gripper
-    tbot3_gripper.set_start_state_to_current_state()
-    tbot3_gripper.set_goal_state(motion_plan_constraints=[joint_constraint_open_gripper])
-    plan_and_execute(tbot3, tbot3_gripper, logger, sleep_time=3.0, single_plan_parameters=params)
+        # Sleep for few seconds
+        time.sleep(2)
 
-    # Close the gripper
-    tbot3_gripper.set_start_state_to_current_state()
-    tbot3_gripper.set_goal_state(motion_plan_constraints=[joint_constraint_closed_gripper])
-    plan_and_execute(tbot3, tbot3_gripper, logger, sleep_time=3.0, single_plan_parameters=params)
+        # Close the gripper
+        send_arm_goal(node, logger, client, position=-0.01)
 
-    ###########################################################################
-    # Returning to Home position before program ends
-    ########################################################################### 
-    
-    #Set start state to current
-    tbot3_arm.set_start_state_to_current_state()
-      
-    # set pose goal using predefined state
-    tbot3_arm.set_goal_state(configuration_name="home")
+        ###########################################################################
+        # Returning to Home position before program ends
+        ########################################################################### 
+        
+        #Set start state to current
+        tbot3_arm.set_start_state_to_current_state()
+        
+        # set pose goal using predefined state
+        tbot3_arm.set_goal_state(configuration_name="home")
 
-    # plan to goal
-    plan_and_execute(tbot3, tbot3_arm, logger, sleep_time=3.0) #Forward Kinematics are easy; therefore, default planner & parameters are sufficient - no need for IK solution checking  
+        # plan to goal
+        plan_and_execute(tbot3, tbot3_arm, logger, sleep_time=3.0) #Forward Kinematics are easy; therefore, default planner & parameters are sufficient - no need for IK solution checking  
+    finally:
+        rclpy.shutdown()
+
 
 if __name__ == "__main__":
     main()
